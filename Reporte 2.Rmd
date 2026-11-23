@@ -1,0 +1,488 @@
+---
+output: 
+  bookdown::pdf_document2:
+    number_sections: no
+    toc: no
+    highlight: tango
+geometry: margin=2.0cm
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+#Limpiamos entorno
+rm(list = ls(all.names = TRUE))
+gc() #Liberamos memoria
+
+#Personalizacion del trabajo
+knitr::opts_chunk$set(
+	echo = TRUE,
+	fig.align = "center",
+#Agregamos configuraciones para evitar mensajes de advertencias y de errores en el archivo
+	message = FALSE,
+	warning = FALSE,
+	error = F
+)
+
+#Elegimos nuestra carpeta
+setwd("C:/Users/xuper/OneDrive/Escritorio/Machine learning")
+
+# Librerías
+library(dplyr)      # Para el manejo de datos
+library(ggplot2)    # Para realizar gráficas
+library(kableExtra) # Para un mejor manejo de tablas
+library(GGally)     # Para realizar análisis descriptivo fácilmente
+library(multcomp)   # Para pruebas de hipótesis
+library(ggResidpanel) # Para el análisis gráfico y diagnóstico de residuos
+library(car)          # Para diagnósticos avanzados de regresión y ANOVA
+library(DHARMa)       # Para diagnóstico de residuos en modelos lineales generalizados y mixtos
+library(knitr)        # Para la generación de reportes dinámicos y renderizado de documentos
+library(patchwork) # Para colocar gráficos lado a lado
+```
+
+```{r lectura de datos, echo=FALSE}
+# Redondeo
+options(digits=8)  
+#lectura de datos
+Datos=read.csv("Preg1B.csv", header=TRUE, sep="," )
+
+#Variable "sex" es una variable categórica, pasamos a factor
+Datos$sex = factor(Datos$sex, levels=c(1,2), labels=c("Hombre","Mujer") )
+
+#eliminamos la columna del indice de los datos
+Datos <- Datos[, !names(Datos) %in% c("X")]
+```
+
+# Análisis sobre el efecto del índice de masa corporal sobre la presión arterial sistólica
+
+Para este trabajo se nos proporcionan datos sobre la presión sistólica de 438 individuos, queremos ver su relación con el índice de masa corporal (bmi), como variables confusoras de nuestro modelo tenemos a la edad (Age) que afecta a la presión arterial sistólica a lo largo de la vida de un individuo y como esta puede variar entre hombres y mujeres (sex), esto nos ayudara a diferenciar entre los datos por individuo.
+
+El objetivo del análisis es observar si un índice de masa corporal alto se asocia con una alta presión arterial sistólica, para esto tendremos que construir un GLM.
+
+Primero analicemos nuestros datos con una gráfica:
+
+```{r,fig.width=10, fig.height=4.5, out.width="100%", echo=FALSE}
+# Gráfico 1: Scatter plot
+p1 <- ggplot(Datos, aes(x = bmi, y = bpsystol, color = sex)) +
+  geom_point(size = 2.5) +
+  scale_color_manual(values = c("red", "darkcyan")) +
+  scale_x_continuous(limits = c(15, 45)) +
+  scale_y_continuous(limits = c(75, 170)) +
+  labs(
+    title = "Relación entre BMI y Presión Sistólica",
+    x = "Índice de Masa Corporal",
+    y = "Presión A. Sistólica",
+    caption = "Figura 1",
+    color = "Sexo"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 15),
+    axis.title = element_text(face = "bold", size = 13),
+    axis.text = element_text(size = 12),
+    legend.title = element_text(face = "bold", size = 12),
+    legend.text = element_text(size = 12),
+    plot.caption = element_text(hjust = 0.5, size = 12),
+    legend.position = "top"
+  )
+
+# Gráfico 2: Boxplot
+p2 <- ggplot(Datos, aes(x = sex, y = bpsystol, fill = sex)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("red", "darkcyan")) +
+  labs(
+    title = "Comparación de Presión Sistólica por Sexo",
+    x = "Sexo",
+    y = "Presión A. Sistólica",
+    caption = "Figura 2"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 15),
+    axis.title = element_text(face = "bold", size = 13),
+    axis.text = element_text(size = 12),
+    plot.caption = element_text(hjust = 0.5, size = 12),
+    legend.position = "none"
+  )
+
+# Mostrar en el mismo renglón
+p1 + p2
+```
+
+De la Figura 1, podemos observar que, si existe una relación entre los datos de bmi y la presión Arterial sistólica, se observa un incremento conforme más masa corporal se tiene para hombres y mujeres, aunque no en la misma proporción, no se observa una linealidad muy clara pero no parece haber demasiados problemas en que la varianza de los datos sea constante para ambos grupos.
+
+En la Figura 2. se observa una diferencia entre estas mismas presiones sistólicas, lo que indica una diferencia entre hombres y mujeres algo marcada por la media de los datos, los hombres parecen mostrar una presión sistólica más alta que las mujeres, esto nos dice que si es importante considerar si la presión que se mide es de un hombre o una mujer.
+
+Derivado de esto propondremos un modelo lineal generalizado donde se buscara una función de probabilidad que ajuste adecuadamente a los datos, para esto se hace la construcción de un código donde se probaran distintos modelos, se usan distintas funciones de probabilidad (Gamma, Normal, inversa gaussiana), junto con distintas funciones liga (identidad , logaritmo, inversa, inversa cuadratica), sumado a esto se prueban distintas transformaciones a nuestras variables "bmi" y "age" donde se buscara la mejor combinación de estos factores que dé solución a nuestro problema, el criterio de selección para nuestro modelo será el que tenga el AIC más bajo.
+
+La búsqueda de este modelo se encuentra en el chunk llamado: Seleccion_de_modelo
+
+```{r Seleccion_de_modelo, include=FALSE}
+# Uso de mallas para probar diferentes valores de nuestro modelo
+# Mallas para el valor de potencia o grado:
+malla=seq(from = 1, to = 5, by = 1)
+(Poli <- cbind("poly", malla))
+
+malla=seq(from = -5, to = 5, by = .5)
+(Pot <- cbind("pot", malla))
+
+# diferentes opciones a probar para el componente lineal:
+(CompLin=rbind(Poli, Pot))
+
+# Malla con las diferentes opciones a probar:
+(Distribuciones=c("gaussian", "Gamma", "inverse.gaussian"))
+
+# Malla con las diferentes funciones liga a probar:
+(FunLigas=c("identity", "log", "inverse", "1/mu^2"))
+
+#Definimos la longitud de los vectores para saber cuantas iteraciones
+#hara nuestro proceso
+nFunLigas=length(FunLigas)
+nDist=length(Distribuciones)
+nCompLin=dim(CompLin)[1]
+
+# Listas para guardar resultados
+ModelList = list(NA)  
+AICList = list(NA)    
+BICList = list(NA)    
+FormList = list(NA)   
+
+#fijamos el indice de los modelos en cero
+index = 0
+
+# 1. Ciclo para las transformaciones de 'bmi'
+for(k_bmi in 1:nCompLin){
+  
+  if(CompLin[k_bmi, 1] == "poly"){
+    term_bmi = paste0("poly(bmi, ", CompLin[k_bmi, 2], ", raw=TRUE)")
+  } else {
+    if(CompLin[k_bmi, 2] == 0){
+      term_bmi = "I(log(bmi))"
+    } else {
+      term_bmi = paste0("I(bmi^(", CompLin[k_bmi, 2], "))")
+    }
+  }
+  
+  # 2. Ciclo anidado para las transformaciones de 'age'
+  for(k_age in 1:nCompLin){
+    
+    if(CompLin[k_age, 1] == "poly"){
+      term_age = paste0("poly(age, ", CompLin[k_age, 2], ", raw=TRUE)")
+    } else {
+      if(CompLin[k_age, 2] == 0){
+        term_age = "I(log(age))"
+      } else {
+        term_age = paste0("I(age^(", CompLin[k_age, 2], "))")
+      }
+    }
+    
+    # Construcción de la fórmula uniendo bmi, age y sex
+    formstring = paste0("bpsystol ~ ", term_bmi, " + ", term_age, " + sex")
+    form <- as.formula(formstring)
+    
+    # 3. Ciclo para Distribuciones
+    for(j in 1:nDist){
+      for(l in 1:nFunLigas){
+        #definición del argumento family
+        if(FunLigas[l]=="1/mu^2"){
+          if(Distribuciones[j]=="inverse.gaussian"){
+            index=index+1
+            Dist=get(Distribuciones[j])  #obtener la función a usar
+            Mod.A.Prueba=glm(form, data=Datos, family = Dist(link=FunLigas[l]))
+            ModelList[[index]]=Mod.A.Prueba
+            AICList[[index]]=AIC(Mod.A.Prueba)
+            BICList[[index]]=BIC(Mod.A.Prueba)
+            FormList[[index]]=formstring
+          }
+        }else{
+          index=index+1
+          Dist=get(Distribuciones[j])
+          Mod.A.Prueba=glm(form, data=Datos, family = Dist(link=FunLigas[l]))
+          ModelList[[index]]=Mod.A.Prueba
+          AICList[[index]]=AIC(Mod.A.Prueba)
+          BICList[[index]]=BIC(Mod.A.Prueba)
+          FormList[[index]]=formstring
+        }
+      }
+    }
+  }
+}
+
+# índice del modelo con menor AIC
+# unlist() es necesario porque la lista tiene valores NA por los modelos que fallaron
+best_model_index = which.min(unlist(AICList))
+print(paste("Mejor modelo índice:", best_model_index))
+print(paste("Fórmula:", FormList[[best_model_index]]))
+print(paste("AIC:", AICList[[best_model_index]]))
+MinAIC=which.min(unlist(AICList))
+ModMinAIC=ModelList[[MinAIC]]
+summary(ModMinAIC)
+ModMinAIC$family
+
+AICList[[MinAIC]]
+BICList[[MinAIC]]
+FormList[[MinAIC]]
+
+#índice del modelo con menor BIC
+
+MinBIC=which.min(unlist(BICList))
+ModMinBIC=ModelList[[MinBIC]]
+summary(ModMinBIC)
+ModMinBIC$family
+
+AICList[[MinBIC]]
+BICList[[MinBIC]]
+FormList[[MinBIC]]
+
+#Los otros modelos
+AICs=unlist(AICList)
+DatAICs=cbind(Index=1:length(AICs), AICs)
+DatAICs=DatAICs[order(AICs),]
+
+#segundo lugar en modelos
+ModAIC2=ModelList[[DatAICs[2,1]]]
+summary(ModAIC2)
+ModAIC2$family
+
+AICList[[DatAICs[2,1]]]
+BICList[[DatAICs[2,1]]]
+FormList[[DatAICs[2,1]]]
+
+#tercer lugar en modelos
+ModAIC3=ModelList[[DatAICs[3,1]]]
+summary(ModAIC3)
+ModAIC3$family
+
+AICList[[DatAICs[3,1]]]
+BICList[[DatAICs[3,1]]]
+FormList[[DatAICs[3,1]]]
+```
+
+Presentamos los 3 mejores modelos:
+
+```{r presentacion_de_resultados, echo=FALSE}
+# Guardamos los datos con notación LaTeX
+data.frame(
+  "Tipo" = c("GLM\\_1", "GLM\\_2", "GLM\\_3"), # <--- Cambiado GLM_1 a GLM\\_1
+  "Info.Adicional1" = c("Familia: Gamma", "Familia: Gamma", "Familia: Gamma"),
+  "Info.Adicional2" = c("Liga: Identidad", "Liga: Identidad", "Liga: Identidad"), 
+  "Fórmula" = c(
+    "$\\beta_0 + \\beta_1 \\text{bmi}^{1.5} + \\beta_2 \\text{age}^4 + \\beta_3 I(\\text{sex}=\\text{Mujer})$",
+    "$\\beta_0 + \\beta_1 \\text{bmi}^{1.5} + \\beta_2 \\text{age}^{4.5} + \\beta_3 I(\\text{sex}=\\text{Mujer})$",
+    "$\\beta_0 + \\beta_1 \\text{bmi} + \\beta_2 \\text{age}^4 + \\beta_3 I(\\text{sex}=\\text{Mujer})$"
+  ), 
+  "AIC" = c(3531.7431, 3531.8404, 3531.8409)
+) %>% 
+  kbl(booktabs = TRUE, align = "c", escape = FALSE) %>%
+  kable_styling(latex_options = c("striped", "scale_down", "HOLD_position"))
+```
+
+```{r verificacion, include=FALSE}
+#Modelo inicial (glm1)
+glm1=glm(bpsystol~ bmi + I(age^(4)) + sex, data=Datos, family = Gamma(link="identity"))
+summary(glm1)
+
+#Vista de los residuales
+X11()
+resid_panel(glm1, plots=c("all"))
+
+#residuales, prueba de hipotesis
+X11()
+residualPlots(glm1)
+
+## Grafica con la libreria dharma
+
+set.seed(123)
+glm1res <- simulateResiduals(fittedModel = glm1)
+X11()
+plot(glm1res)
+
+##Grafica de linealidad para cada variable 
+
+X11()
+plotResiduals(glm1res, Datos$bmi)
+
+X11()
+plotResiduals(glm1res, Datos$age^(4))
+
+X11()
+plotResiduals(glm1res, Datos$age)
+```
+
+A partir de la anterior, y de la verificación supuestos que se encuentra en el chunk "verificacion", decidimos utilizar el modelo GLM_3, pues no se encontró evidencia fuerte en contra de estos además de ser el modelo que, aunque no tenga el menor AIC mantiene a la variable bmi sin transformar, lo cual facilita el uso de este modelo en cuanto a su interpretación, ya que obtendremos ciertos resultados más fácilmente, por lo que decidimos usar el modelo GLM_3.
+
+Dicho esto, se procedió a realizar una prueba de hipótesis para determinar si en efecto tener un índice de masa corporal alto
+se asocia con una alta presión arterial sistólica. Para esto, recordemos que nuestro modelo se ajustó como
+
+$$\mathbb{E}[bpsystol]=\beta_0+\beta_1(bmi)+\beta_2(age^4)+\beta_3I(sex_{Mujer})$$
+
+Observamos que bmi es una variable que se extrajo sin transformar de los datos y se usó la liga identidad, por lo que para responder esta pregunta nosotros queremos verificar que $bmi>0$ asi $bpsystol>0$ tras realizar operaciones algebraicas, la prueba que se realizó fue de la forma:
+
+$$H_{0}: \beta_1 \leq 0 \ \ \ \ \ vs \ \ \ \ \ H_{a}: \beta_1 > 0 $$
+
+Y se realizó la prueba de hipótesis correspondiente, la cual se puede encontrar en el chunk “PH”.
+
+```{r PH, include=FALSE}
+#iii. ¿Se puede indicar que para una persona de cierta edad y sexo, 
+#tener un índice de masa corporal alto
+#se asocia con una alta presión arterial sistólica?
+
+#Para cualquier edad y sexo, nos pide revisar para si la variable "bpsystol" aumenta
+#si aumenta la variable "bmi"
+
+#s.p.g sup bmi_1 > bmi_2
+#     E(y ; bmi_1, age, sex) = b0 + b1 bmi_1 + b2 (age^4) + b3 I(sex = Mujer) >
+#     E(y ; bmi_2, age, sex) = b0 + b1 bmi_2 + b2 (age^4) + b3 I(sex = Mujer) 
+# -> b0 + b1 bmi_1 + b2 (age^4) + b3 I(sex = Mujer) > b0 + b1 bmi_2 + b2 (age^4) + b3 I(sex = Mujer)
+# -> b1 bmi_1 > b1 bmi_2 -> b1(bmi_1 - bmi_2) > 0
+# -> b1 > 0
+
+#Definimos la prueba:
+#H0: b1 <= 0    vs    Ha: b1 > 0
+
+#Al estar utilizando la liga identidad junto con la identidad para la variable bmi, la prueba correspondiente se mantiene tal cual como en
+#regresión lineal
+
+#Usamos una prueba lineal general (plg)
+K=matrix(c(0,1,0,0), ncol=4, nrow=1, byrow=TRUE)
+m=c(0)
+summary(glht(glm1, linfct=K, rhs=m, alternative="greater"))
+
+prueba <- glht(glm1, linfct = K, rhs = m, alternative = "greater")
+res_prueba <- summary(prueba)
+
+#Con un nivel de significancia del 0.05
+#Se rechaza H0, así podemos decir que no hay suficiente prueba estadística 
+#para decir que los niveles de presión sistólica no son altos 
+#si el índice de masa corporal es alto
+
+#(Si hay una relación positiva entre ambas variables)
+```
+
+```{r, include=FALSE}
+# 2. Extraer las métricas usando $tstat
+p_val <- res_prueba$test$pvalues[1]
+z_val <- res_prueba$test$tstat[1]           # Usar $tstat para el valor z
+coef_est <- res_prueba$test$coefficients[1]
+```
+
+
+### Resultado de la Prueba Lineal General (PLG)
+
+* **Valor $p$ ($p$-value):** $< 2.2 \times 10^{-16}$ (Estadístico $z = 8.9085$, Estimación $= 1.21039$).
+
+* **Conclusión:** Dado que el $p$-value es inferior al nivel de significancia $\alpha = 0.05$ ($p < 2.2 \times 10^{-16}$), la prueba **sí fue estadísticamente significativa** y se rechaza la hipótesis nula ($H_0$).
+
+* **Significado:** Existe evidencia estadística suficiente para afirmar que un mayor Índice de Masa Corporal incrementa de forma significativa los niveles de presión arterial sistólica.
+
+Para ilustrar mejor nuestro resultado proponemos una grafica donde proponemos a personas de cierta edad (30, 45 y 65), y se hace la diferencia entre hombres y mujeres, dejando libre bmi junto con la variable de respuesta bpsystol.
+
+```{r,fig.width=10, fig.height=4.5, out.width="100%", echo=FALSE}
+# Expandimos los valores que tomamos de bmi para su graficación
+datos_graf <- expand.grid(
+  bmi = seq(min(Datos$bmi),
+            max(Datos$bmi),
+            length.out = 100),
+  age = c(30, 45, 65),
+  sex = levels(Datos$sex)
+)
+
+# Dividimos por el sexo para su graficación
+datos_graf$sex <- factor(
+  datos_graf$sex,
+  levels = levels(Datos$sex)
+)
+
+# Obtener las estimaciones de glm1
+datos_graf$y <- predict(glm1, newdata = datos_graf)
+
+# 1. Crear la variable combinada de Sexo y Edad para asignar los colores
+datos_graf$grupo_color <- paste(datos_graf$sex, datos_graf$age, sep = "_")
+
+# 2. Definir la paleta manual (Gama de rojos para Hombre, gama de cian para Mujer)
+paleta_colores <- c(
+  "Hombre_30" = "#ff7f7f",  # Rojo claro
+  "Hombre_45" = "#e60000",  # Rojo medio
+  "Hombre_65" = "#800000",  # Rojo oscuro
+  "Mujer_30"  = "#73d2d6",  # Darkcyan claro
+  "Mujer_45"  = "darkcyan", # Darkcyan medio
+  "Mujer_65"  = "#004d40"   # Darkcyan oscuro
+)
+
+# Graficar
+ggplot(datos_graf,
+       aes(x = bmi, y = y,
+           color = grupo_color,
+           group = age)) +
+  geom_line(linewidth = 1) +
+  facet_wrap(~ sex) +
+  scale_color_manual(
+    values = paleta_colores,
+    name = "Edad y Sexo",
+    breaks = c("Hombre_30", "Hombre_45", "Hombre_65", "Mujer_30", "Mujer_45", "Mujer_65"),
+    labels = c("Hombre (30)", "Hombre (45)", "Hombre (65)", 
+               "Mujer (30)", "Mujer (45)", "Mujer (65)")
+  ) +
+  labs(
+    title = "Relación entre BMI y presión arterial sistólica",
+    x = "Índice de masa corporal (BMI)",
+    y = "Presión arterial transformada estimada",
+    caption = "Figura 3"
+  ) +
+  theme_minimal(base_size = 14) + 
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5, margin = margin(b = 12)),
+    axis.title = element_text(size = 13, face = "bold"),
+    axis.title.x = element_text(margin = margin(t = 10)),
+    axis.title.y = element_text(margin = margin(r = 10)),
+    axis.text = element_text(size = 12),
+    strip.text = element_text(size = 14, face = "bold"),
+    legend.title = element_text(size = 13, face = "bold"),
+    legend.text = element_text(size = 12),
+    plot.caption = element_text(size = 12, hjust = 0.5, margin = margin(t = 12))
+  )
+```
+Se observa en la Figura 3 que mientras más edad tiene las personas, tienen una presión arterial sistólica más grande con una pendiente mayor visible entre edades, lo que reafirma nuestro resultado obtenido en la prueba de hipótesis.
+
+Comparando este modelo con uno obtenido de regresión lineal que fue de la misma forma en la fórmula de la esperanza, solo que cambiando con una prueba box-cox a la variable bpsystol y boxTidwell para la edad, la formula del modelo de regresión fue:
+
+$$ \mathbb{E}[ln(bpsystol)]=\beta_0+\beta_1(bmi)+\beta_2(age^4)+\beta_3I(sex_{Mujer})$$
+
+Para comparar este modelo con el propuesto en este trabajo, debemos hacer una transformacion al AIC del modelo de regresion lineal ajustandolo para que se modele unicamente bajo $bpsystol$ y no bajo $ln(bpsystol)$, esto se puede verificar en el chunk de "mod1_comparacion", por lo que los modelos quedan como:
+
+```{r mod1_comparacion, include=FALSE}
+# Ajuste del modelo lineal en la escala transformada ln(y)
+Datos$bpsystol_bc <- log(Datos$bpsystol)
+fit3 <- lm(bpsystol_bc ~ bmi + I((age)^(4)) + sex, data = Datos)
+
+# Log-verosimilitud en la escala original de Y (bpsystol)
+loglikY <- sum(log(dnorm(log(Datos$bpsystol), fit3$fitted.values, sigma(fit3)) * (1 / Datos$bpsystol)))
+
+# NÃºmero de parÃ¡metros estimados (intercepto + 3 regresores + sigma)
+k <- length(fit3$coefficients) + 1 
+
+# CÃ¡lculo del AIC en la escala de Y
+AICY <- -2 * (loglikY) + 2 * k
+(AICY)
+```
+
+```{r TablaAIC, echo=FALSE}
+# Guardamos los datos con notación LaTeX
+data.frame(
+  "Tipo" = c("GLM", "Regresión lineal"),
+  "Info.Adicional1" = c("Familia: Gamma", "Y transformada"),
+  "Info.Adicional2" = c("Liga: Identidad", "Transformación: $\\ln(\\text{bpsystol})$"), 
+  "Fórmula" = c(
+    "$\\beta_0 + \\beta_1 \\text{bmi} + \\beta_2 \\text{age}^4 + \\beta_3 I(\\text{sex} = \\text{Mujer})$",
+    "$\\beta_0 + \\beta_1 \\text{bmi} + \\beta_2 \\text{age}^4 + \\beta_3 I(\\text{sex} = \\text{Mujer})$"
+  ), 
+  "AIC" = c(3531.8409, 3535.771)
+) %>% 
+  # Volvemos tabla y deshabilitamos el escape para interpretar LaTeX
+  kbl(booktabs = TRUE, align = "c", escape = FALSE) %>%
+  kable_styling(latex_options = c("striped", "scale_down", "HOLD_position"))
+
+```
+
+El modelo GLM presenta un AIC menor, lo que indica un mejor ajuste al penalizar por la complejidad frente a la regresión lineal. Al utilizar una distribución gamma, el GLM garantiza predicciones estrictamente positivas para bpsystol, evitando los valores e intervalos de confianza negativos que la distribución normal del modelo lineal podría arrojar. Finalmente, el GLM estima la esperanza de los datos, mientras que aplicar ln(bpsystol) en la regresión lineal obliga a recupera la mediana de los datos porque la esperanza de la transformación no es igual a la transformación de la esperanza.
+
+Por lo que el modelo preferido de usar seria el **GLM función gamma con liga identidad**.
